@@ -18,22 +18,20 @@
 #include <core.p4>
 #include <v1model.p4>
 
-// CPU_PORT specifies the P4 port number associated to controller packet-in and
-// packet-out. All packets forwarded via this port will be delivered to the
-// controller as P4Runtime PacketIn messages. Similarly, PacketOut messages from
-// the controller will be seen by the P4 pipeline as coming from the CPU_PORT.
+// CPU_PORTは、コントローラーのパケットインとパケットアウトに関連付けられたP4ポート番号を指定します。
+// このポート経由で転送されるすべてのパケットは、P4Runtime PacketInメッセージとしてコントローラーに配信されます。
+// 同様に、コントローラーからのPacketOutメッセージは、P4パイプラインからCPU_PORTからのものとして認識されます。
 #define CPU_PORT 255
 
-// CPU_CLONE_SESSION_ID specifies the mirroring session for packets to be cloned
-// to the CPU port. Packets associated with this session ID will be cloned to
-// the CPU_PORT as well as being transmitted via their egress port (set by the
-// bridging/routing/acl table). For cloning to work, the P4Runtime controller
-// needs first to insert a CloneSessionEntry that maps this session ID to the
-// CPU_PORT.
+// CPU_CLONE_SESSION_IDは、CPUポートにクローンされるパケットのミラーリングセッションを指定します。
+// このセッションIDに関連付けられたパケットは、CPU_PORTにクローンされると同時に、
+// その出力ポート（ブリッジング/ルーティング/ACLテーブルによって設定）経由で送信されます。
+// クローニングが機能するためには、P4Runtimeコントローラーが最初にこのセッションIDをCPU_PORTに
+// マッピングするCloneSessionEntryを挿入する必要があります。
 #define CPU_CLONE_SESSION_ID 99
 
-// Maximum number of hops supported when using SRv6.
-// Required for Exercise 7.
+// SRv6を使用する際にサポートされる最大ホップ数。
+// Exercise 7で必要。
 #define SRV6_MAX_HOPS 4
 
 typedef bit<9>   port_num_t;
@@ -65,7 +63,7 @@ const bit<32> NDP_FLAG_OVERRIDE  = 0x20000000;
 
 
 //------------------------------------------------------------------------------
-// HEADER DEFINITIONS
+// ヘッダー定義
 //------------------------------------------------------------------------------
 
 header ethernet_t {
@@ -160,20 +158,20 @@ header ndp_t {
     bit<48>      target_mac_addr;
 }
 
-// Packet-in header. Prepended to packets sent to the CPU_PORT and used by the
-// P4Runtime server (Stratum) to populate the PacketIn message metadata fields.
-// Here we use it to carry the original ingress port where the packet was
-// received.
+// パケットインヘッダー。CPU_PORTに送信されるパケットに前置され、
+// P4Runtimeサーバー（Stratum）によってPacketInメッセージのメタデータフィールドを
+// 設定するために使用されます。ここでは、パケットが受信された元の入力ポートを
+// 運ぶために使用します。
 @controller_header("packet_in")
 header cpu_in_header_t {
     port_num_t  ingress_port;
     bit<7>      _pad;
 }
 
-// Packet-out header. Prepended to packets received from the CPU_PORT. Fields of
-// this header are populated by the P4Runtime server based on the P4Runtime
-// PacketOut metadata fields. Here we use it to inform the P4 pipeline on which
-// port this packet-out should be transmitted.
+// パケットアウトヘッダー。CPU_PORTから受信したパケットに前置されます。
+// このヘッダーのフィールドは、P4Runtime PacketOutメタデータフィールドに基づいて
+// P4Runtimeサーバーによって設定されます。ここでは、このパケットアウトが
+// どのポートで送信されるべきかをP4パイプラインに通知するために使用します。
 @controller_header("packet_out")
 header cpu_out_header_t {
     port_num_t  egress_port;
@@ -313,8 +311,8 @@ parser ParserImpl (packet_in packet,
     }
 
     state check_last_srv6 {
-        // working with bit<8> and int<32> which cannot be cast directly; using
-        // bit<32> as common intermediate type for comparision
+        // bit<8>とint<32>は直接キャストできないため、比較のために
+        // bit<32>を共通の中間型として使用
         bool last_segment = (bit<32>)hdr.srv6h.last_entry == (bit<32>)hdr.srv6_list.lastIndex;
         transition select(last_segment) {
            true: parse_srv6_next_hdr;
@@ -336,8 +334,8 @@ parser ParserImpl (packet_in packet,
 control VerifyChecksumImpl(inout parsed_headers_t hdr,
                            inout local_metadata_t meta)
 {
-    // Not used here. We assume all packets have valid checksum, if not, we let
-    // the end hosts detect errors.
+    // ここでは使用されていません。すべてのパケットが有効なチェックサムを持つと仮定し、
+    // そうでない場合は、エンドホストにエラーを検出させます。
     apply { /* EMPTY */ }
 }
 
@@ -346,38 +344,35 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
                          inout local_metadata_t    local_metadata,
                          inout standard_metadata_t standard_metadata) {
 
-    // Drop action shared by many tables.
+    // 多くのテーブルで共有されるドロップアクション。
     action drop() {
         mark_to_drop(standard_metadata);
     }
 
 
-    // *** L2 BRIDGING
+    // *** L2ブリッジング
     //
-    // Here we define tables to forward packets based on their Ethernet
-    // destination address. There are two types of L2 entries that we
-    // need to support:
+    // ここでは、イーサネット宛先アドレスに基づいてパケットを転送するテーブルを定義します。
+    // サポートする必要があるL2エントリには2つのタイプがあります：
     //
-    // 1. Unicast entries: which will be filled in by the control plane when the
-    //    location (port) of new hosts is learned.
-    // 2. Broadcast/multicast entries: used replicate NDP Neighbor Solicitation
-    //    (NS) messages to all host-facing ports;
+    // 1. ユニキャストエントリ：新しいホストの場所（ポート）が学習されたときに
+    //    コントロールプレーンによって入力されます。
+    // 2. ブロードキャスト/マルチキャストエントリ：NDP Neighbor Solicitation（NS）
+    //    メッセージをすべてのホスト向けポートに複製するために使用されます。
     //
-    // For (2), unlike ARP messages in IPv4 which are broadcasted to Ethernet
-    // destination address FF:FF:FF:FF:FF:FF, NDP messages are sent to special
-    // Ethernet addresses specified by RFC2464. These addresses are prefixed
-    // with 33:33 and the last four octets are the last four octets of the IPv6
-    // destination multicast address. The most straightforward way of matching
-    // on such IPv6 broadcast/multicast packets, without digging in the details
-    // of RFC2464, is to use a ternary match on 33:33:**:**:**:**, where * means
-    // "don't care".
+    // （2）について、IPv4のARPメッセージがイーサネット宛先アドレスFF:FF:FF:FF:FF:FFに
+    // ブロードキャストされるのとは異なり、NDPメッセージはRFC2464で指定された特別な
+    // イーサネットアドレスに送信されます。これらのアドレスは33:33で始まり、
+    // 最後の4オクテットはIPv6宛先マルチキャストアドレスの最後の4オクテットです。
+    // RFC2464の詳細を掘り下げることなく、このようなIPv6ブロードキャスト/マルチキャスト
+    // パケットにマッチする最も直接的な方法は、33:33:**:**:**:**でテルナリーマッチを使用することです。
+    // ここで*は「気にしない」を意味します。
     //
-    // For this reason, our solution defines two tables. One that matches in an
-    // exact fashion (easier to scale on switch ASIC memory) and one that uses
-    // ternary matching (which requires more expensive TCAM memories, usually
-    // much smaller).
+    // この理由から、我々のソリューションでは2つのテーブルを定義しています。
+    // 1つは正確なマッチング（スイッチASICメモリでスケールしやすい）で、
+    // もう1つはテルナリーマッチング（より高価なTCAMメモリが必要、通常ははるかに小さい）を使用します。
 
-    // --- l2_exact_table (for unicast entries) --------------------------------
+    // --- l2_exact_table（ユニキャストエントリ用） --------------------------------
 
     action set_egress_port(port_num_t port_num) {
         standard_metadata.egress_spec = port_num;
@@ -392,20 +387,19 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
             @defaultonly drop;
         }
         const default_action = drop;
-        // The @name annotation is used here to provide a name to this table
-        // counter, as it will be needed by the compiler to generate the
-        // corresponding P4Info entity.
+        // @nameアノテーションは、このテーブルカウンターに名前を提供するためにここで使用されます。
+        // これは、コンパイラーが対応するP4Infoエンティティを生成するために必要です。
         @name("l2_exact_table_counter")
         counters = direct_counter(CounterType.packets_and_bytes);
     }
 
-    // --- l2_ternary_table (for broadcast/multicast entries) ------------------
+    // --- l2_ternary_table（ブロードキャスト/マルチキャストエントリ用） ------------------
 
     action set_multicast_group(mcast_group_id_t gid) {
-        // gid will be used by the Packet Replication Engine (PRE) in the
-        // Traffic Manager--located right after the ingress pipeline, to
-        // replicate a packet to multiple egress ports, specified by the control
-        // plane by means of P4Runtime MulticastGroupEntry messages.
+        // gidは、イングレスパイプラインの直後にあるTraffic Manager内の
+        // Packet Replication Engine（PRE）によって使用され、
+        // コントロールプレーンがP4Runtime MulticastGroupEntryメッセージによって
+        // 指定した複数の出力ポートにパケットを複製します。
         standard_metadata.mcast_grp = gid;
         local_metadata.is_multicast = true;
     }
@@ -424,53 +418,52 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
     }
 
 
-    // *** TODO EXERCISE 5 (IPV6 ROUTING)
+    // *** TODO EXERCISE 5（IPv6ルーティング）
     //
-    // 1. Create a table to to handle NDP messages to resolve the MAC address of
-    //    switch. This table should:
-    //    - match on hdr.ndp.target_ipv6_addr (exact match)
-    //    - provide action "ndp_ns_to_na" (look in snippets.p4)
-    //    - default_action should be "NoAction"
+    // 1. スイッチのMACアドレスを解決するためのNDPメッセージを処理するテーブルを作成します。
+    //    このテーブルは以下を行う必要があります：
+    //    - hdr.ndp.target_ipv6_addrでマッチ（正確なマッチ）
+    //    - アクション「ndp_ns_to_na」を提供（snippets.p4を参照）
+    //    - default_actionは「NoAction」である必要があります
     //
-    // 2. Create table to handle IPv6 routing. Create a L2 my station table (hit
-    //    when Ethernet destination address is the switch address). This table
-    //    should not do anything to the packet (i.e., NoAction), but the control
-    //    block below should use the result (table.hit) to decide how to process
-    //    the packet.
+    // 2. IPv6ルーティングを処理するテーブルを作成します。L2マイステーションテーブルを作成します
+    //    （イーサネット宛先アドレスがスイッチアドレスの場合にヒット）。
+    //    このテーブルはパケットに対して何も行うべきではありません（つまり、NoAction）が、
+    //    下のコントロールブロックは結果（table.hit）を使用してパケットの処理方法を決定する必要があります。
     //
-    // 3. Create a table for IPv6 routing. An action selector should be use to
-    //    pick a next hop MAC address according to a hash of packet header
-    //    fields (IPv6 source/destination address and the flow label). Look in
-    //    snippets.p4 for an example of an action selector and table using it.
+    // 3. IPv6ルーティング用のテーブルを作成します。アクションセレクターを使用して、
+    //    パケットヘッダーフィールド（IPv6送信元/宛先アドレスとフローラベル）のハッシュに
+    //    従って次のホップMACアドレスを選択する必要があります。
+    //    snippets.p4でアクションセレクターとそれを使用するテーブルの例を参照してください。
     //
-    // You can name your tables whatever you like. You will need to fill
-    // the name in elsewhere in this exercise.
+    // テーブルには任意の名前を付けることができます。この演習の他の場所で
+    // 名前を入力する必要があります。
 
 
-    // *** TODO EXERCISE 6 (SRV6)
+    // *** TODO EXERCISE 6（SRV6）
     //
-    // Implement tables to provide SRV6 logic.
+    // SRV6ロジックを提供するテーブルを実装します。
 
 
     // *** ACL
     //
-    // Provides ways to override a previous forwarding decision, for example
-    // requiring that a packet is cloned/sent to the CPU, or dropped.
+    // 以前の転送決定をオーバーライドする方法を提供します。例えば、
+    // パケットをクローン/CPUに送信する、またはドロップすることを要求します。
     //
-    // We use this table to clone all NDP packets to the control plane, so to
-    // enable host discovery. When the location of a new host is discovered, the
-    // controller is expected to update the L2 and L3 tables with the
-    // corresponding bridging and routing entries.
+    // このテーブルを使用してすべてのNDPパケットをコントロールプレーンにクローンし、
+    // ホスト発見を可能にします。新しいホストの場所が発見されたとき、
+    // コントローラーは対応するブリッジングとルーティングエントリで
+    // L2とL3テーブルを更新することが期待されます。
 
     action send_to_cpu() {
         standard_metadata.egress_spec = CPU_PORT;
     }
 
     action clone_to_cpu() {
-        // Cloning is achieved by using a v1model-specific primitive. Here we
-        // set the type of clone operation (ingress-to-egress pipeline), the
-        // clone session ID (the CPU one), and the metadata fields we want to
-        // preserve for the cloned packet replica.
+        // クローニングは、v1model固有のプリミティブを使用して実現されます。ここでは
+        // クローン操作のタイプ（イングレスからエグレスパイプライン）、
+        // クローンセッションID（CPUのもの）、およびクローンされたパケットレプリカに
+        // 保持したいメタデータフィールドを設定します。
         clone3(CloneType.I2E, CPU_CLONE_SESSION_ID, { standard_metadata.ingress_port });
     }
 
@@ -498,46 +491,45 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
 
         if (hdr.cpu_out.isValid()) {
             // *** TODO EXERCISE 4
-            // Implement logic such that if this is a packet-out from the
-            // controller:
-            // 1. Set the packet egress port to that found in the cpu_out header
-            // 2. Remove (set invalid) the cpu_out header
-            // 3. Exit the pipeline here (no need to go through other tables
+            // これがコントローラーからのパケットアウトの場合のロジックを実装します：
+            // 1. パケットの出力ポートをcpu_outヘッダーで見つかったものに設定
+            // 2. cpu_outヘッダーを削除（無効に設定）
+            // 3. ここでパイプラインを終了（他のテーブルを通過する必要はありません）
         }
 
         bool do_l3_l2 = true;
 
         if (hdr.icmpv6.isValid() && hdr.icmpv6.type == ICMP6_TYPE_NS) {
             // *** TODO EXERCISE 5
-            // Insert logic to handle NDP messages to resolve the MAC address of the
-            // switch. You should apply the NDP reply table created before.
-            // If this is an NDP NS packet, i.e., if a matching entry is found,
-            // unset the "do_l3_l2" flag to skip the L3 and L2 tables, as the
-            // "ndp_ns_to_na" action already set an egress port.
+            // スイッチのMACアドレスを解決するためのNDPメッセージを処理するロジックを挿入します。
+            // 前に作成したNDP応答テーブルを適用する必要があります。
+            // これがNDP NSパケットの場合、つまり、マッチするエントリが見つかった場合、
+            // 「ndp_ns_to_na」アクションが既に出力ポートを設定しているため、
+            // L3とL2テーブルをスキップするために「do_l3_l2」フラグをクリアします。
         }
 
         if (do_l3_l2) {
 
             // *** TODO EXERCISE 5
-            // Insert logic to match the My Station table and upon hit, the
-            // routing table. You should also add a conditional to drop the
-            // packet if the hop_limit reaches 0.
+            // マイステーションテーブルにマッチし、ヒット時にルーティングテーブルに
+            // マッチするロジックを挿入します。ホップリミットが0に達した場合に
+            // パケットをドロップする条件も追加する必要があります。
 
             // *** TODO EXERCISE 6
-            // Insert logic to match the SRv6 My SID and Transit tables as well
-            // as logic to perform PSP behavior. HINT: This logic belongs
-            // somewhere between checking the switch's my station table and
-            // applying the routing table.
+            // SRv6マイSIDとトランジットテーブルにマッチするロジック、および
+            // PSP動作を実行するロジックを挿入します。ヒント：このロジックは
+            // スイッチのマイステーションテーブルをチェックすることと
+            // ルーティングテーブルを適用することの間のどこかに属します。
 
-            // L2 bridging logic. Apply the exact table first...
+            // L2ブリッジングロジック。まず正確なテーブルを適用...
             if (!l2_exact_table.apply().hit) {
-                // ...if an entry is NOT found, apply the ternary one in case
-                // this is a multicast/broadcast NDP NS packet.
+                // ...エントリが見つからない場合、これがマルチキャスト/ブロードキャスト
+                // NDP NSパケットの場合に備えて、テルナリーを適用します。
                 l2_ternary_table.apply();
             }
         }
 
-        // Lastly, apply the ACL table.
+        // 最後に、ACLテーブルを適用します。
         acl_table.apply();
     }
 }
@@ -550,18 +542,17 @@ control EgressPipeImpl (inout parsed_headers_t hdr,
 
         if (standard_metadata.egress_port == CPU_PORT) {
             // *** TODO EXERCISE 4
-            // Implement logic such that if the packet is to be forwarded to the
-            // CPU port, e.g., if in ingress we matched on the ACL table with
-            // action send/clone_to_cpu...
-            // 1. Set cpu_in header as valid
-            // 2. Set the cpu_in.ingress_port field to the original packet's
-            //    ingress port (standard_metadata.ingress_port).
+            // パケットがCPUポートに転送される場合のロジックを実装します。
+            // 例えば、イングレスでACLテーブルにマッチしてsend/clone_to_cpuアクションが
+            // 実行された場合...
+            // 1. cpu_inヘッダーを有効に設定
+            // 2. cpu_in.ingress_portフィールドを元のパケットの
+            //    入力ポート（standard_metadata.ingress_port）に設定します。
         }
 
-        // If this is a multicast packet (flag set by l2_ternary_table), make
-        // sure we are not replicating the packet on the same port where it was
-        // received. This is useful to avoid broadcasting NDP requests on the
-        // ingress port.
+        // これがマルチキャストパケット（l2_ternary_tableによって設定されたフラグ）の場合、
+        // パケットが受信されたのと同じポートでパケットを複製しないようにします。
+        // これは、入力ポートでNDPリクエストをブロードキャストすることを避けるのに役立ちます。
         if (local_metadata.is_multicast == true &&
               standard_metadata.ingress_port == standard_metadata.egress_port) {
             mark_to_drop(standard_metadata);
@@ -574,9 +565,9 @@ control ComputeChecksumImpl(inout parsed_headers_t hdr,
                             inout local_metadata_t local_metadata)
 {
     apply {
-        // The following is used to update the ICMPv6 checksum of NDP
-        // NA packets generated by the ndp reply table in the ingress pipeline.
-        // This function is executed only if the NDP header is present.
+        // 以下は、イングレスパイプラインのndp応答テーブルによって生成された
+        // NDP NAパケットのICMPv6チェックサムを更新するために使用されます。
+        // この関数は、NDPヘッダーが存在する場合にのみ実行されます。
         update_checksum(hdr.ndp.isValid(),
             {
                 hdr.ipv6.src_addr,
